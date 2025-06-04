@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-ecommerce
+  namespace: go-ecommerce
+  labels:
+    app: go-ecommerce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-ecommerce
+  template:
+    metadata:
+      labels:
+        app: go-ecommerce
+    spec:
+      containers:
+      - name: app
+        image: go-ecommerce-app:latest
+        ports:
+        - containerPort: 8080
+        env:
+  
+        - name: DB_HOST
+          value: postgres-db-service
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_PASSWORD
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_DB
+        - name: OIDC_ISSUER_URL
+          value: "https://accounts.google.com"
+    
