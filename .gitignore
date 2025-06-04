@@ -1,0 +1,17 @@
+.env
+.envrc
+
+# Go
+*.exe
+*.out
+*.test
+vendor/
+bin/
+*.log
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# System
+.DS_Store
