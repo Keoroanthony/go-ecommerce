@@ -11,6 +11,17 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-test}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-test}
       POSTGRES_DB: ${POSTGRES_DB:-test}
+      OIDC_ISSUER: ${OIDC_ISSUER:-https://accounts.google.com}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-test-id}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-test-secret}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-http://localhost:8080/auth/callback}
+      SESSION_SECRET: ${SESSION_SECRET:-test}
+      AT_SENDER_ID: ${AT_SENDER_ID:-test-id}
+      AT_USERNAME: ${AT_USERNAME:-test-username}
+      AT_API_KEY: ${AT_API_KEY:-test-key}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test-id}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test-key}
+      AWS_REGION: ${AWS_REGION:-test-region}
     depends_on:
       - postgres-db
     networks:
