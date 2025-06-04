@@ -16,9 +16,7 @@ import (
 	"github.com/Keoroanthony/go-ecommerce/internal/db"
 	"github.com/Keoroanthony/go-ecommerce/internal/handlers"
 	"github.com/Keoroanthony/go-ecommerce/internal/models"
-
 )
-
 
 func setupProductTestRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
 	gin.SetMode(gin.TestMode)
@@ -29,11 +27,14 @@ func setupProductTestRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
 		panic("failed to connect test database: " + err.Error())
 	}
 
-	// Auto-migrate all relevant models
+	// Auto-migrate all relevant models (Category must have ParentID field)
 	err = testDB.AutoMigrate(&models.Product{}, &models.Category{})
 	if err != nil {
 		panic("failed to auto-migrate models: " + err.Error())
 	}
+
+	testDB.Exec("DELETE FROM products;")
+    testDB.Exec("DELETE FROM categories;")
 
 	originalDB := db.DB
 	db.SetTestDB(testDB) // Set the test database for the handlers
@@ -115,14 +116,15 @@ func TestCreateProductHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, recorder.Code)
 		var response map[string]string
-		json.Unmarshal(recorder.Body.Bytes(), &response)
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Contains(t, response["error"], "Key: 'CreateProductRequest.Name' Error:Field validation for 'Name' failed on the 'required' tag")
 	})
 
 	t.Run("Returns 400 for invalid JSON request - price less than or equal to 0", func(t *testing.T) {
 		reqBody := handlers.CreateProductRequest{
-			Name:       "Zero Price Item",
-			Price:      0,
+			Name:       "Negative Price Item",
+			Price:      -1.0,
 			CategoryID: category.ID,
 		}
 		recorder := httptest.NewRecorder()
@@ -131,7 +133,8 @@ func TestCreateProductHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, recorder.Code)
 		var response map[string]string
-		json.Unmarshal(recorder.Body.Bytes(), &response)
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Contains(t, response["error"], "Key: 'CreateProductRequest.Price' Error:Field validation for 'Price' failed on the 'gt' tag")
 	})
 
@@ -148,8 +151,9 @@ func TestCreateProductHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusNotFound, recorder.Code)
 		var response map[string]string
-		json.Unmarshal(recorder.Body.Bytes(), &response)
-		assert.Equal(t, fmt.Sprintf("Parent category not found with ID: %d", nonExistentCategoryID), response["error"])
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, fmt.Sprintf("Category not found with ID: %d", nonExistentCategoryID), response["error"])
 
 		// Verify no product was created in DB
 		var count int64
@@ -158,10 +162,6 @@ func TestCreateProductHandler(t *testing.T) {
 	})
 
 	t.Run("Returns 500 for database error during creation (simulated - harder in in-memory)", func(t *testing.T) {
-		// This is generally hard to test directly in an in-memory SQLite with GORM
-		// without mocking the GORM DB instance itself. For simpler handler tests,
-		// we often skip direct DB error simulation and test it at the service layer
-		// if a service layer exists.
 		t.Skip("Skipping direct database error simulation for simplicity.")
 	})
 }
@@ -170,94 +170,169 @@ func TestCreateProductHandler(t *testing.T) {
 func TestGetAveragePriceHandler(t *testing.T) {
 	router, testDB := setupProductTestRouter(t)
 
-	// Seed categories and products for testing GetAveragePrice
-	cat1 := models.Category{Name: "Category 1"}
-	cat2 := models.Category{Name: "Category 2"} // Child of Category 1 in mock
-	cat3 := models.Category{Name: "Category 3"} // Child of Category 1 in mock
-	cat4 := models.Category{Name: "Category 4"} // Independent category
+	// --- Seed categories with parent-child relationships ---
+	// Category 1 (root)
+	cat1 := models.Category{Name: "Electronics"}
 	testDB.Create(&cat1)
+
+	// Category 2 (child of Cat 1)
+	cat2ParentID := cat1.ID
+	cat2 := models.Category{Name: "Laptops", ParentID: &cat2ParentID}
 	testDB.Create(&cat2)
+
+	// Category 3 (child of Cat 1)
+	cat3ParentID := cat1.ID
+	cat3 := models.Category{Name: "Smartphones", ParentID: &cat3ParentID}
 	testDB.Create(&cat3)
+
+	// Category 5 (child of Cat 2) - grandchild of Cat 1
+	cat5ParentID := cat2.ID
+	cat5 := models.Category{Name: "Gaming Laptops", ParentID: &cat5ParentID}
+	testDB.Create(&cat5)
+
+
+	// Category 4 (independent root category)
+	cat4 := models.Category{Name: "Books"}
 	testDB.Create(&cat4)
 
-	// Products for Category 1 (and its mocked children 2, 3)
-	testDB.Create(&models.Product{Name: "P1.1", Price: 10.0, CategoryID: cat1.ID})
-	testDB.Create(&models.Product{Name: "P1.2", Price: 20.0, CategoryID: cat1.ID})
-	testDB.Create(&models.Product{Name: "P2.1", Price: 30.0, CategoryID: cat2.ID})
-	testDB.Create(&models.Product{Name: "P3.1", Price: 40.0, CategoryID: cat3.ID})
+	// --- Seed products associated with these categories ---
+	// Products for Category 1 (Electronics)
+	testDB.Create(&models.Product{Name: "All-Purpose Charger", Price: 10.0, CategoryID: cat1.ID})
+	testDB.Create(&models.Product{Name: "Basic Mouse", Price: 20.0, CategoryID: cat1.ID})
 
-	// Products for Category 4 (independent)
-	testDB.Create(&models.Product{Name: "P4.1", Price: 50.0, CategoryID: cat4.ID})
+	// Products for Category 2 (Laptops)
+	testDB.Create(&models.Product{Name: "Budget Laptop", Price: 300.0, CategoryID: cat2.ID})
+	testDB.Create(&models.Product{Name: "Mid-Range Laptop", Price: 500.0, CategoryID: cat2.ID})
 
-	t.Run("Successfully gets average price for a category and its descendants", func(t *testing.T) {
-		// With mock, category 1 should include products from 1, 2, and 3
-		// (10+20+30+40)/4 = 100/4 = 25
+	// Products for Category 3 (Smartphones)
+	testDB.Create(&models.Product{Name: "Android Phone", Price: 400.0, CategoryID: cat3.ID})
+	testDB.Create(&models.Product{Name: "iPhone", Price: 700.0, CategoryID: cat3.ID})
+
+	// Products for Category 5 (Gaming Laptops) - grandchild of Cat 1
+	testDB.Create(&models.Product{Name: "High-End Gaming Laptop", Price: 1500.0, CategoryID: cat5.ID})
+
+	// Products for Category 4 (Books) - independent
+	testDB.Create(&models.Product{Name: "Go Programming Book", Price: 50.0, CategoryID: cat4.ID})
+
+
+	t.Run("Successfully gets average price for a root category and all its descendants", func(t *testing.T) {
+		// Category 1 (Electronics) includes products from cat1, cat2, cat3, cat5
+		// Prices: 10 + 20 + 300 + 500 + 400 + 700 + 1500 = 3430
+		// Number of products: 7
+		// Average: 3430 / 7 = 490
 		recorder := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/products/average?category_id=%d", cat1.ID), nil)
 		router.ServeHTTP(recorder, req)
 
 		assert.Equal(t, http.StatusOK, recorder.Code)
 		var response map[string]interface{}
-		json.Unmarshal(recorder.Body.Bytes(), &response)
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Equal(t, float64(cat1.ID), response["category_id"])
-		assert.InDelta(t, 25.0, response["average_price"], 0.001) 
+		assert.InDelta(t, 490.0, response["average_price"], 0.001)
 	})
 
-	t.Run("Successfully gets average price for a category with no children (mocked)", func(t *testing.T) {
-		// Category 4 only has P4.1 (50.0)
+	t.Run("Successfully gets average price for a mid-level category and its descendants", func(t *testing.T) {
+		// Category 2 (Laptops) includes products from cat2, cat5
+		// Prices: 300 + 500 + 1500 = 2300
+		// Number of products: 3
+		// Average: 2300 / 3 = 766.666...
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/products/average_price?category_id=%d", cat4.ID), nil)
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/products/average?category_id=%d", cat2.ID), nil)
 		router.ServeHTTP(recorder, req)
 
 		assert.Equal(t, http.StatusOK, recorder.Code)
 		var response map[string]interface{}
-		json.Unmarshal(recorder.Body.Bytes(), &response)
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, float64(cat2.ID), response["category_id"])
+		assert.InDelta(t, 766.666, response["average_price"], 0.001) // Using 0.001 delta for float
+	})
+
+	t.Run("Successfully gets average price for a leaf category (no children) and its descendants", func(t *testing.T) {
+		// Category 3 (Smartphones) has products only in cat3, no children with products
+		// Prices: 400 + 700 = 1100
+		// Number of products: 2
+		// Average: 1100 / 2 = 550
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/products/average?category_id=%d", cat3.ID), nil)
+		router.ServeHTTP(recorder, req)
+
+		assert.Equal(t, http.StatusOK, recorder.Code)
+		var response map[string]interface{}
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, float64(cat3.ID), response["category_id"])
+		assert.InDelta(t, 550.0, response["average_price"], 0.001)
+	})
+
+	t.Run("Successfully gets average price for an independent category", func(t *testing.T) {
+		// Category 4 (Books) only has P4.1 (50.0)
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/products/average?category_id=%d", cat4.ID), nil)
+		router.ServeHTTP(recorder, req)
+
+		assert.Equal(t, http.StatusOK, recorder.Code)
+		var response map[string]interface{}
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Equal(t, float64(cat4.ID), response["category_id"])
 		assert.InDelta(t, 50.0, response["average_price"], 0.001)
 	})
 
-	t.Run("Returns average price 0 for category with no products", func(t *testing.T) {
-		// Create a new category with no products
-		catNoProducts := models.Category{Name: "Category No Products"}
+	t.Run("Returns average price 0 for category with no products in its hierarchy", func(t *testing.T) {
+		// Create a new category with no products and no children
+		catNoProducts := models.Category{Name: "Category No Products Hierarchy"}
 		testDB.Create(&catNoProducts)
 
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/products/average_price?category_id=%d", catNoProducts.ID), nil)
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/products/average?category_id=%d", catNoProducts.ID), nil)
 		router.ServeHTTP(recorder, req)
 
 		assert.Equal(t, http.StatusOK, recorder.Code)
 		var response map[string]interface{}
-		json.Unmarshal(recorder.Body.Bytes(), &response)
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Equal(t, float64(catNoProducts.ID), response["category_id"])
 		assert.InDelta(t, 0.0, response["average_price"], 0.001)
 	})
 
 	t.Run("Returns 400 if category_id is missing", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/api/products/average", nil) 
+		req := httptest.NewRequest(http.MethodGet, "/api/products/average", nil) // No query param
 		router.ServeHTTP(recorder, req)
 
 		assert.Equal(t, http.StatusBadRequest, recorder.Code)
 		var response map[string]string
-		json.Unmarshal(recorder.Body.Bytes(), &response)
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Equal(t, "category_id is required", response["error"])
 	})
 
 	t.Run("Returns 400 for invalid category_id", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/api/products/average_price?category_id=abc", nil) // Non-numeric
+		req := httptest.NewRequest(http.MethodGet, "/api/products/average?category_id=abc", nil) // Non-numeric
 		router.ServeHTTP(recorder, req)
 
 		assert.Equal(t, http.StatusBadRequest, recorder.Code)
 		var response map[string]string
-		json.Unmarshal(recorder.Body.Bytes(), &response)
+		err := json.Unmarshal(recorder.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Equal(t, "Invalid category_id", response["error"])
 	})
 
+	t.Run("Returns 500 if GetAllCategoryIDs returns an error (simulated - for robustness)", func(t *testing.T) {
+		// To simulate an error from utils.GetAllCategoryIDs without mocking,
+		// you'd need to cause a database error *inside* the utils function itself.
+		// This is difficult to do cleanly in an in-memory SQLite test without
+		// directly manipulating the database connection at a low level.
+		// For now, we'll keep this skipped as it's outside the scope of
+		// simply removing the mock. If you had a way to inject a faulty DB
+		// connection into utils.GetAllCategoryIDs, you'd do it here.
+		t.Skip("Simulating utils.GetAllCategoryIDs internal error without mocking is complex.")
+	})
+
 	t.Run("Returns 500 for database error during average calculation (simulated)", func(t *testing.T) {
-		// This is also complex to simulate directly with in-memory GORM.
-		// One way would be to close the database connection right before the query,
-		// but that affects all subsequent tests. Better to mock the DB.
 		t.Skip("Skipping direct database error simulation for average calculation for simplicity.")
 	})
 }

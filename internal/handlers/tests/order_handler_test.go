@@ -34,6 +34,11 @@ func setupOrderTestRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
 		panic("failed to auto-migrate models: " + err.Error())
 	}
 
+	testDB.Exec("DELETE FROM products;")
+    testDB.Exec("DELETE FROM categories;")
+	testDB.Exec("DELETE FROM orders;")
+	testDB.Exec("DELETE FROM order_items;")
+
 	originalDB := db.DB
 	db.SetTestDB(testDB)
 

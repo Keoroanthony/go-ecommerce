@@ -34,6 +34,8 @@ func setupCategoryTestRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
 		panic("failed to auto-migrate models: " + err.Error())
 	}
 
+    testDB.Exec("DELETE FROM categories;")
+
 	originalDB := db.DB // Store the original DB instance before setting test DB
 	db.SetTestDB(testDB)
 
